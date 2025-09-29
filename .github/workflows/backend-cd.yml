@@ -3,71 +3,50 @@ name: CD - Deploy Backend Services to AKS
 on:
   workflow_dispatch:
     inputs:
-      aks_cluster_name:
-        description: 'Name of the AKS Cluster to deploy to'
-        required: true
-        default: '<aks_cluster_name>'
-      aks_resource_group:
-        description: 'Resource Group of the AKS Cluster'
-        required: true
-        default: '<resource_group_name>'
-      aks_acr_name:
-        description: 'Name of ACR'
-        required: true
-        default: '<acr_name>'
+      aks_cluster_name:   { description: 'AKS name', required: true, default: '<aks_cluster_name>' }
+      aks_resource_group: { description: 'AKS RG',   required: true, default: '<resource_group_name>' }
+      aks_acr_name:       { description: 'ACR name', required: true, default: '<acr_name>' }
 
 jobs:
-  deploy_backend:
-    runs-on: ubuntu-latest
+  apply_manifests:
+    uses: ./.github/workflows/_deploy-aks.yml
     environment: Production
-
-    outputs:
-      PRODUCT_API_IP: ${{ steps.get_product_ip.outputs.external_ip }}
-      ORDER_API_IP: ${{ steps.get_order_ip.outputs.external_ip }}
-
+    with:
+      aks_cluster_name:   ${{ github.event.inputs.aks_cluster_name }}
+      aks_resource_group: ${{ github.event.inputs.aks_resource_group }}
+      aks_acr_name:       ${{ github.event.inputs.aks_acr_name }}
+      manifests_path:     k8s/
+    secrets:
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+  wait_for_ips:
+    runs-on: ubuntu-latest
+    needs: apply_manifests
     steps:
-      - name: Deploy backend manifests via reusable workflow
-        uses: ./.github/workflows/_deploy-aks.yml
+      - uses: azure/login@v1
         with:
-          aks_cluster_name:   ${{ github.event.inputs.aks_cluster_name }}
-          aks_resource_group: ${{ github.event.inputs.aks_resource_group }}
-          aks_acr_name:       ${{ github.event.inputs.aks_acr_name }}
-          manifests_path:     k8s/
-        secrets:
-          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Wait for Backend LoadBalancer IPs
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Set context
         run: |
-          echo "Waiting for Product, Order LoadBalancer IPs to be assigned (up to 5 minutes)..."
-          PRODUCT_IP=""
-          ORDER_IP=""
-
+          az aks get-credentials \
+            --resource-group "${{ github.event.inputs.aks_resource_group }}" \
+            --name "${{ github.event.inputs.aks_cluster_name }}" \
+            --overwrite-existing
+      - name: Wait for IPs
+        run: |
+          PRODUCT_IP=""; ORDER_IP=""
           for i in $(seq 1 60); do
-            echo "Attempt $i/60 to get IPs..."
             PRODUCT_IP=$(kubectl get service product-service-w08e1 -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
             ORDER_IP=$(kubectl get service order-service-w08e1 -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-
-            if [[ -n "$PRODUCT_IP" && -n "$ORDER_IP" ]]; then
-              echo "All backend LoadBalancer IPs assigned!"
-              echo "Product Service IP: $PRODUCT_IP"
-              echo "Order Service IP: $ORDER_IP"
-              break
-            fi
+            [[ -n "$PRODUCT_IP" && -n "$ORDER_IP" ]] && break
             sleep 5
           done
-
-          if [[ -z "$PRODUCT_IP" || -z "$ORDER_IP" ]]; then
-            echo "Error: One or more LoadBalancer IPs not assigned after timeout."
-            exit 1
-          fi
-
+          [[ -z "$PRODUCT_IP" || -z "$ORDER_IP" ]] && { echo "IPs not assigned"; exit 1; }
           echo "PRODUCT_IP=$PRODUCT_IP" >> $GITHUB_ENV
-          echo "ORDER_IP=$ORDER_IP" >> $GITHUB_ENV
-
-      - name: Capture Product Service IP for Workflow Output
-        id: get_product_ip
+          echo "ORDER_IP=$ORDER_IP"     >> $GITHUB_ENV
+      - id: get_product_ip
         run: echo "external_ip=${{ env.PRODUCT_IP }}" >> $GITHUB_OUTPUT
-
-      - name: Capture Order Service IP for Workflow Output
-        id: get_order_ip
+      - id: get_order_ip
         run: echo "external_ip=${{ env.ORDER_IP }}" >> $GITHUB_OUTPUT
+      - name: Logout
+        if: always()
+        run: az logout
