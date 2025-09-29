@@ -3,36 +3,25 @@ name: _deploy-aks (reusable)
 on:
   workflow_call:
     inputs:
-      aks_cluster_name:
-        required: true
-        type: string
-      aks_resource_group:
-        required: true
-        type: string
-      manifests_path:
-        required: true
-        type: string        
-      aks_acr_name:
-        required: false
-        type: string         
+      aks_cluster_name:   { required: true, type: string }
+      aks_resource_group: { required: true, type: string }
+      manifests_path:     { required: true, type: string }  
+      aks_acr_name:       { required: false, type: string }  
     secrets:
-      AZURE_CREDENTIALS:
-        required: true
+      AZURE_CREDENTIALS:  { required: true }
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Log in to Azure
+      - name: Azure Login
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Set Kubernetes context (get AKS credentials)
+      - name: Set AKS context
         run: |
           az aks get-credentials \
             --resource-group "${{ inputs.aks_resource_group }}" \
@@ -47,10 +36,10 @@ jobs:
             --resource-group "${{ inputs.aks_resource_group }}" \
             --attach-acr "${{ inputs.aks_acr_name }}"
 
-      - name: Apply Kubernetes manifests
+      - name: Apply manifests
         run: |
           kubectl apply -f "${{ inputs.manifests_path }}"
 
-      - name: Logout from Azure
+      - name: Logout
         if: always()
         run: az logout
