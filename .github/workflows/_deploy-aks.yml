@@ -1,56 +1,43 @@
-# .github/workflows/_deploy-aks.yml
 name: Reusable - Deploy to AKS
 
 on:
   workflow_call:
     inputs:
-      aks_cluster_name:
-        required: true
-        type: string
-      aks_resource_group:
-        required: true
-        type: string
-      aks_acr_name:
-        required: false
-        type: string
-      manifests_path:
-        required: true
-        type: string
+      aks_cluster_name:   { required: true, type: string }
+      aks_resource_group: { required: true, type: string }
+      aks_acr_name:       { required: false, type: string }
+      manifests_path:     { required: true, type: string }
     secrets:
-      AZURE_CREDENTIALS:
-        required: true
+      AZURE_CREDENTIALS:  { required: true }
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Azure Login
-        uses: azure/login@v1
+      - uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Set Kubernetes context (get AKS credentials)
+      - name: Set AKS context
         run: |
           az aks get-credentials \
-            --resource-group ${{ inputs.aks_resource_group }} \
-            --name ${{ inputs.aks_cluster_name }} \
+            --resource-group "${{ inputs.aks_resource_group }}" \
+            --name "${{ inputs.aks_cluster_name }}" \
             --overwrite-existing
 
-      - name: Attach ACR (if provided)
+      - name: Attach ACR (optional)
         if: ${{ inputs.aks_acr_name != '' }}
         run: |
           az aks update \
-            --name ${{ inputs.aks_cluster_name }} \
-            --resource-group ${{ inputs.aks_resource_group }} \
-            --attach-acr ${{ inputs.aks_acr_name }}
+            --name "${{ inputs.aks_cluster_name }}" \
+            --resource-group "${{ inputs.aks_resource_group }}" \
+            --attach-acr "${{ inputs.aks_acr_name }}"
 
-      - name: Deploy Kubernetes manifests
-        run: |
-          echo "Deploying manifests from ${{ inputs.manifests_path }}"
-          kubectl apply -f ${{ inputs.manifests_path }}
+      - name: Apply manifests
+        run: kubectl apply -f "${{ inputs.manifests_path }}"
 
-      - name: Logout from Azure
+      - name: Logout
+        if: always()
         run: az logout

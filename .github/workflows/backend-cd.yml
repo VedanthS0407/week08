@@ -1,4 +1,3 @@
-# week08/.github/workflows/backend_cd.yml
 name: CD - Deploy Backend Services to AKS
 
 on:
@@ -9,9 +8,17 @@ on:
       aks_acr_name:       { description: 'ACR name', required: true, default: '<acr_name>' }
 
 jobs:
-  apply_manifests:
-    uses: ./.github/workflows/_deploy-aks.yml
+  # Small gate job to place the environment approval
+  gate_production:
+    runs-on: ubuntu-latest
     environment: Production
+    steps:
+      - run: echo "Prod approval gate passed."
+
+  # Call the reusable workflow AFTER approval
+  apply_manifests:
+    needs: gate_production
+    uses: ./.github/workflows/_deploy-aks.yml
     with:
       aks_cluster_name:   ${{ github.event.inputs.aks_cluster_name }}
       aks_resource_group: ${{ github.event.inputs.aks_resource_group }}
@@ -19,35 +26,41 @@ jobs:
       manifests_path:     k8s/
     secrets:
       AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+
   wait_for_ips:
-    runs-on: ubuntu-latest
     needs: apply_manifests
+    runs-on: ubuntu-latest
     steps:
       - uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
-      - name: Set context
+
+      - name: Set Kubernetes context
         run: |
           az aks get-credentials \
             --resource-group "${{ github.event.inputs.aks_resource_group }}" \
             --name "${{ github.event.inputs.aks_cluster_name }}" \
             --overwrite-existing
-      - name: Wait for IPs
+
+      - name: Wait for Backend LoadBalancer IPs
         run: |
           PRODUCT_IP=""; ORDER_IP=""
           for i in $(seq 1 60); do
             PRODUCT_IP=$(kubectl get service product-service-w08e1 -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
             ORDER_IP=$(kubectl get service order-service-w08e1 -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
             [[ -n "$PRODUCT_IP" && -n "$ORDER_IP" ]] && break
-            sleep 5
+            echo "Attempt $i/60..."; sleep 5
           done
           [[ -z "$PRODUCT_IP" || -z "$ORDER_IP" ]] && { echo "IPs not assigned"; exit 1; }
           echo "PRODUCT_IP=$PRODUCT_IP" >> $GITHUB_ENV
           echo "ORDER_IP=$ORDER_IP"     >> $GITHUB_ENV
+
       - id: get_product_ip
         run: echo "external_ip=${{ env.PRODUCT_IP }}" >> $GITHUB_OUTPUT
+
       - id: get_order_ip
         run: echo "external_ip=${{ env.ORDER_IP }}" >> $GITHUB_OUTPUT
+
       - name: Logout
         if: always()
         run: az logout
